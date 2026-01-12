@@ -1,0 +1,2341 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Hydrodynamic Model</title>
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css"/>
+    <style>
+        body { font-family: sans-serif; margin: 0; padding: 0; display: flex; height: 100vh; overflow: hidden; }
+        #sidebar { 
+            width: 350px; 
+            background: #f0f0f0; 
+            border-right: 1px solid #ccc; 
+            display: flex; 
+            flex-direction: column; 
+            z-index: 1000;
+            flex-shrink: 0;   /* Prevent sidebar from shrinking */
+            height: 100%;
+        }
+        #sidebar-controls {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        
+        /* Floating Console Panel */
+        #console-panel {
+            position: fixed;
+            bottom: 0;
+            left: 350px; /* Offset by Sidebar Width */
+            right: 0;
+            height: 250px;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            z-index: 2000;
+            display: flex;
+            flex-direction: column;
+            border-top: 2px solid #444;
+            box-shadow: 0 -2px 10px rgba(0,0,0,0.5);
+            transition: transform 0.3s ease-in-out;
+            opacity: 0.95;
+        }
+        #console-panel.hidden {
+            transform: translateY(100%);
+        }
+        .console-header {
+            background: #333;
+            padding: 5px 10px;
+            display: flex;
+            align-items: center;
+            font-size: 12px;
+            font-weight: bold;
+            user-select: none;
+            flex-shrink: 0;
+        }
+        #console-content {
+            flex: 1;
+            padding: 10px;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 12px;
+            overflow-y: auto;
+        }
+        
+        .console-line {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            border-bottom: 1px solid #333;
+            padding: 2px 0;
+        }
+        .console-line.warning { color: #dcdcaa; }
+        .console-line.error { color: #f44747; }
+        .console-line.success { color: #6a9955; }
+        .console-line.info { color: #d4d4d4; }
+        .console-line.cmd { color: #569cd6; font-weight: bold; }
+        
+        #main { flex: 1; position: relative; background: #333; overflow: hidden; }
+        #map { width: 100%; height: 100%; }
+        .control-group { border: 1px solid #ccc; padding: 10px; background: #fff; border-radius: 4px; flex-shrink: 0; }
+        .btn { padding: 8px 12px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; width: 100%; margin-bottom: 5px;}
+        .btn:hover { background: #0056b3; }
+        .btn:disabled { background: #ccc; }
+        .btn.active { background: #004494; border: 2px solid #002a5c; }
+        h2 { margin-top: 0; }
+        label { display: block; margin-bottom: 5px; }
+        input { width: 100%; padding: 5px; box-sizing: border-box; }
+        /* Draw tool cursor */
+        .leaflet-container.draw-mode { cursor: crosshair; }
+        .help-icon {
+            display: inline-block;
+            width: 14px;
+            height: 14px;
+            background: #6c757d;
+            color: white;
+            border-radius: 50%;
+            text-align: center;
+            line-height: 14px;
+            font-size: 10px;
+            font-weight: bold;
+            margin-left: 5px;
+            cursor: help;
+            position: relative;
+        }
+        .custom-tooltip {
+            position: fixed;
+            background: #333;
+            color: #fff;
+            padding: 5px 8px;
+            border-radius: 4px;
+            white-space: normal;
+            max-width: 200px;
+            text-align: left;
+            z-index: 10000;
+            font-size: 12px;
+            pointer-events: none;
+            box-shadow: 2px 2px 5px rgba(0,0,0,0.3);
+            display: none;
+        }
+    </style>
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js"></script>
+    <!-- Chart.js -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+</head>
+<body>
+
+<div id="sidebar">
+    <div id="sidebar-controls">
+        <h2 id="app-title">2D Hydro Model (GIS)</h2>
+        
+        <div class="control-group">
+            <button id="btn-mode-toggle" class="btn" style="background: #20c997;">Load 2D Only (No 1D)</button>
+            <div style="margin: 5px 0; font-size: 0.9em; text-align: center;">- OR -</div>
+            <label>Load DEM (GeoTIFF):</label>
+            <input type="file" id="dem-upload" accept=".tif,.tiff">
+            <div id="status">Status: Not Initialized</div>
+        </div>
+
+        <div class="control-group">
+            <h3>View Control (Live)</h3>
+            <label><input type="checkbox" id="chk-show-terrain" checked> Show Terrain (DEM) <span class="help-icon" data-tooltip="Display the Digital Elevation Model">?</span></label>
+            <label><input type="checkbox" id="chk-show-water" checked> Show Water (Results) <span class="help-icon" data-tooltip="Overlay computed water depth">?</span></label>
+            <label><input type="checkbox" id="chk-show-velocity"> Show Flow Direction <span class="help-icon" data-tooltip="Visualize velocity vectors (Arrows)">?</span></label>
+            <label><input type="checkbox" id="chk-show-1d"> Show 1D Results (Chart) <span class="help-icon" data-tooltip="Open 1D Cross-section Profile">?</span></label>
+            <label><input type="checkbox" id="chk-show-console" checked> Show Console Logs <span class="help-icon" data-tooltip="View backend logs and status">?</span></label>
+        </div>
+
+        <div class="control-group">
+            <h3>Simulation Settings</h3>
+            <label>Total Time (s): <span class="help-icon" data-tooltip="Total duration of the simulation in seconds">?</span></label>
+            <input type="number" id="sim-total-time" value="3600.0">
+            
+            <label>Output Interval (s): <span class="help-icon" data-tooltip="Time interval for saving results">?</span></label>
+            <input type="number" id="sim-dt-save" value="60.0">
+            
+            <label>Coupling Cd: <span class="help-icon" data-tooltip="Discharge Coefficient (0.0 - 2.0). Default: 0.4">?</span></label>
+            <input type="number" id="sim-coupling-cd" value="0.4" step="0.1" min="0.0" max="2.0" title="Discharge Coefficient">
+            
+            <label>Coupling Method: <span class="help-icon" data-tooltip="Algorithm for 1D-2D mass/momentum exchange">?</span></label>
+            <select id="sim-coupling-method" style="height:28px;width:267px">
+                <option value="empirical">Empirical (Weir/Orifice)</option>
+                <option value="numerical_flux">Numerical Flux (HLL)</option>
+            </select>
+
+            <label>Bank Height (m): <span class="help-icon" data-tooltip="Height of the bank above terrain for 1D-2D coupling">?</span></label>
+            <input type="number" id="sim-bank-height" value="2.0" step="0.1" min="0.0">
+        </div>
+
+        <div class="control-group">
+            <h3>Simulation</h3>
+            <button id="btn-start" class="btn" disabled>Start Simulation</button>
+            <button id="btn-stop" class="btn" disabled>Stop Simulation</button>
+            <button id="btn-reset" class="btn" style="background: #dc3545; margin-top: 5px;" disabled>Reset Simulation</button>
+        </div>
+
+        <div class="control-group">
+            <h3>Playback Results</h3>
+            <div style="display: flex; gap: 5px;">
+                <button id="btn-play" class="btn" disabled>Play</button>
+                <button id="btn-pause" class="btn" disabled>Pause</button>
+            </div>
+            <input type="range" id="playback-slider" min="0" max="0" value="0" disabled style="width: 100%;">
+            <div id="playback-status" style="text-align: center; margin: 5px 0;">Frame: 0 / 0</div>
+            <label>Speed (ms/frame):</label>
+            <input type="number" id="playback-speed" value="200" min="50" step="50">
+            <label><input type="checkbox" id="chk-playback-show-water" checked> Show Water (Playback)</label>
+            <button id="btn-refresh-results" class="btn" style="margin-top: 5px; background: #28a745;">Load/Refresh Results</button>
+        </div>
+
+        <div class="control-group">
+            <h3>Tools</h3>
+            <button class="btn tool-btn active" data-tool="view">View / Pan</button>
+            <button class="btn tool-btn" data-tool="inflow">Draw Inflow (Polyline)</button>
+            <button class="btn tool-btn" data-tool="outflow">Draw Outflow (Polyline)</button>
+            <button class="btn tool-btn" data-tool="mask">Draw Mask (Polygon)</button>
+            <button class="btn tool-btn" data-tool="aoi">Draw AOI (Polygon)</button>
+            <button class="btn tool-btn" data-tool="channel_1d">Draw 1D Channel</button>
+            
+            <label>Upload Boundary (Zip/GeoJSON):</label>
+            <input type="file" id="boundary-upload" accept=".zip,.geojson,.json">
+
+            <div id="channel-1d-settings" style="display:none; border: 1px solid #ccc; padding: 5px; margin-top: 10px; background: #f9f9f9; max-height: 400px; overflow-y: auto;">
+                <strong>1D Network Builder</strong><br>
+                <div style="font-size: 0.85em; color: #666; margin-bottom: 5px;">
+                    Draw multiple connected branches. Double-click to finish a branch. Start/End points snap to existing nodes.
+                </div>
+                
+                <div id="net-edge-settings" style="border: 1px solid #ddd; padding: 5px; margin-bottom: 5px; background: #fff;">
+                    <strong>New Branch Settings</strong><br>
+                    <label>Width Start:</label> <input type="number" id="net-width-start" value="20.0" step="1.0" style="width: 100px;">
+                    <label>End:</label> <input type="number" id="net-width-end" value="20.0" step="1.0" style="width: 100px;"><br>
+                    
+                    <label>Manning's n:</label> <input type="number" id="net-n" value="0.03" step="0.001" style="width: 100px;"><br>
+                    
+                    <label>Z Start:</label> <input type="number" id="net-z-start" value="15.0" step="0.1" style="width: 100px;">
+                    <label>Z End:</label> <input type="number" id="net-z-end" value="10.0" step="0.1" style="width: 100px;"><br>
+                    
+                    <label>dx (m):</label> <input type="number" id="net-dx" value="50.0" step="10.0" style="width: 100px;"><br>
+                </div>
+
+                <div style="border: 1px solid #ddd; padding: 5px; margin-bottom: 5px; background: #fff;">
+                    <strong>Initialization</strong><br>
+                    <label>Initial Depth (m):</label> <input type="number" id="net-init-h" value="0.0" step="0.1" style="width: 80px;">
+                    <br>
+                    <label>Engine:</label> 
+                    <select id="net-engine-type">
+                        <option value="python">Python (HLL)</option>
+                        <option value="cpp" selected>C++ (Implicit)</option>
+                    </select>
+                </div>
+
+                <div style="font-size: 0.8em; margin-bottom: 5px;">
+                    Nodes: <span id="net-stats-nodes">0</span> | Edges: <span id="net-stats-edges">0</span>
+                </div>
+
+                <button id="btn-create-1d" class="btn" style="width:100%; margin-top:5px; background:#28a745;">Build Network</button>
+                <button id="btn-clear-network" class="btn" style="width:100%; margin-top:5px; background:#ffc107;">Clear All</button>
+                
+                <div style="border-top: 1px solid #ddd; margin-top: 10px; padding-top: 5px;">
+                    <strong>Node Selection</strong><br>
+                    <div id="node-select-info" style="font-size: 0.9em; color: #666; margin-bottom: 5px;">
+                        Click a node to view info.
+                    </div>
+                    <!-- Boundary Selection Removed as per user request (use Draw Inflow tool) -->
+                </div>
+
+                <button id="btn-cancel-1d" class="btn" style="width:100%; margin-top:5px; background:#dc3545;">Close</button>
+            </div>
+
+            <div id="inflow-settings" style="display:none; border: 1px solid #ccc; padding: 5px; margin-top: 10px;">
+                <strong>Inflow Settings</strong><br>
+                <label>Type:</label>
+                <select id="inflow-type">
+                    <option value="H">Water Level (m)</option>
+                    <option value="Q">Flow Rate (m3/s)</option>
+                </select>
+                <br>
+                <label>Mode:</label>
+                <select id="inflow-mode">
+                    <option value="constant">Constant</option>
+                    <option value="series">Time Series</option>
+                </select>
+                <br>
+                <div id="inflow-constant-input">
+                    <label>Value:</label>
+                    <input type="number" id="inflow-value" value="10.0" step="0.1">
+                </div>
+                <div id="inflow-series-input" style="display:none;">
+                    <label>Series (Time(s), Value):</label><br>
+                    <textarea id="inflow-series-data" rows="5" style="width:100%" placeholder="0, 10&#10;100, 12&#10;200, 15"></textarea>
+                </div>
+
+                <div id="inflow-confirm-panel" style="display:none; margin-top: 10px; border-top: 1px solid #ccc; padding-top: 5px;">
+                    <div id="inflow-stats-display" style="font-size: 0.9em; margin-bottom: 5px; color: #333;"></div>
+                    <button id="btn-create-inflow" class="btn" style="width:100%; margin-top:5px; background:#28a745;">Create Inflow</button>
+                    <button id="btn-cancel-inflow" class="btn" style="width:100%; margin-top:5px; background:#dc3545;">Cancel / Redraw</button>
+                </div>
+            </div>
+
+            <div id="outflow-settings" style="display:none; border: 1px solid #ccc; padding: 5px; margin-top: 10px;">
+                <strong>Outflow Settings</strong><br>
+                <label>Type:</label>
+                <select id="outflow-type">
+                    <option value="transmissive">Free (Transmissive)</option>
+                    <option value="fixed_q">Limited (Fixed Q)</option>
+                </select>
+                <br>
+                <div id="outflow-q-input" style="display:none;">
+                    <label>Max Flow Rate (m3/s):</label>
+                    <input type="number" id="outflow-value" value="10.0" step="0.1">
+                </div>
+
+                <div id="outflow-confirm-panel" style="display:none; margin-top: 10px; border-top: 1px solid #ccc; padding-top: 5px;">
+                     <div id="outflow-stats-display" style="font-size: 0.9em; margin-bottom: 5px; color: #333;"></div>
+                    <button id="btn-create-outflow" class="btn" style="width:100%; margin-top:5px; background:#28a745;">Create Outflow</button>
+                    <button id="btn-cancel-outflow" class="btn" style="width:100%; margin-top:5px; background:#dc3545;">Cancel / Redraw</button>
+                </div>
+            </div>
+
+            <div id="aoi-settings" style="display:none; border: 1px solid #ccc; padding: 5px; margin-top: 10px;">
+                <strong>AOI Settings</strong><br>
+                <div id="aoi-status">Draw polygon on map...</div>
+                <div id="aoi-confirm-panel" style="display:none; margin-top: 10px; border-top: 1px solid #ccc; padding-top: 5px;">
+                    <p style="font-size:0.9em; margin:5px 0; color:#555;">Drag vertices to adjust.</p>
+                    <button id="btn-create-aoi" class="btn" style="width:100%; margin-top:5px; background:#28a745;">Confirm AOI</button>
+                    <button id="btn-cancel-aoi" class="btn" style="width:100%; margin-top:5px; background:#dc3545;">Cancel / Redraw</button>
+                </div>
+            </div>
+
+            <div id="default-bc-settings">
+                <label>Boundary Value (WSE):</label>
+                <input type="number" id="bc-value" value="15.0">
+            </div>
+        </div>
+    </div>
+     
+     <!-- Removed sidebar-console from here -->
+ </div>
+
+ <div id="panel-1d" style="position: fixed; top: 10px; right: 10px; width: 400px; height: 300px; background: rgba(255, 255, 255, 0.9); border: 1px solid #ccc; z-index: 2000; display: none; flex-direction: column; box-shadow: 0 0 10px rgba(0,0,0,0.2);">
+    <div style="padding: 5px 10px; background: #eee; border-bottom: 1px solid #ccc; font-weight: bold; display: flex; justify-content: space-between;">
+        <span>1D Channel Profile</span>
+        <button id="btn-close-1d" style="background:none; border:none; font-weight:bold; cursor:pointer;">&#10005;</button>
+    </div>
+    <div style="flex: 1; padding: 10px;">
+        <canvas id="chart-1d"></canvas>
+    </div>
+</div>
+
+<div id="console-panel">
+    <div class="console-header">
+        <span>Real-time Console Output</span>
+        <div style="margin-left: auto;">
+            <button id="btn-clear-console" style="margin-right:10px; padding: 2px 8px; background: #555; border:none; color:white; cursor:pointer; border-radius: 2px;">Clear</button>
+            <button id="btn-close-console" style="padding: 2px 8px; background: #c00; border:none; color:white; cursor:pointer; border-radius: 2px;">&#10005;</button>
+        </div>
+    </div>
+    <div id="console-content">
+        <div class="console-line info">System Ready...</div>
+    </div>
+ </div>
+
+ <div id="main">
+    <div id="map"></div>
+</div>
+
+<script>
+    const API_URL = "http://127.0.0.1:8003";
+    let isRunning = false;
+    let currentTool = "view";
+    let tempInflowPoints = [];
+    
+    // --- Console Logic ---
+    const consolePanel = document.getElementById('console-panel');
+    const consoleDiv = document.getElementById('console-content');
+    const chkShowConsole = document.getElementById('chk-show-console');
+    const btnCloseConsole = document.getElementById('btn-close-console');
+    const btnClearConsole = document.getElementById('btn-clear-console');
+
+    // Toggle Console Visibility
+    const updateConsoleVisibility = () => {
+        if (chkShowConsole.checked) {
+            consolePanel.classList.remove('hidden');
+        } else {
+            consolePanel.classList.add('hidden');
+        }
+    };
+    
+    chkShowConsole.onchange = updateConsoleVisibility;
+    
+    // Close Button Action
+    btnCloseConsole.onclick = () => {
+        chkShowConsole.checked = false;
+        updateConsoleVisibility();
+    };
+
+    // Clear Button Action
+    btnClearConsole.onclick = () => {
+        consoleDiv.innerHTML = '';
+    };
+
+    function appendConsole(text, type='info') {
+        const line = document.createElement('div');
+        line.className = `console-line ${type}`;
+        
+        // Highlight keywords
+        let formatted = text.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        
+        // Default styling based on content
+        if (formatted.includes("WARNING") || formatted.includes("Warning")) line.className = "console-line warning";
+        else if (formatted.includes("ERROR") || formatted.includes("Error") || formatted.includes("Exception")) line.className = "console-line error";
+        else if (formatted.includes("DEBUG")) line.className = "console-line info";
+        else if (formatted.includes("SAVING") || formatted.includes(">>>")) line.className = "console-line cmd";
+        else if (formatted.includes("Progress")) line.className = "console-line success";
+        
+        line.innerHTML = formatted;
+        consoleDiv.appendChild(line);
+        consoleDiv.scrollTop = consoleDiv.scrollHeight;
+    }
+
+    // Connect WebSocket
+    const wsUrl = API_URL.replace("http", "ws") + "/ws/logs";
+    let ws = null;
+    
+    function connectWs() {
+        ws = new WebSocket(wsUrl);
+        ws.onopen = () => {
+            appendConsole("Connected to Console Stream.", "success");
+        };
+        ws.onmessage = (event) => {
+            appendConsole(event.data);
+        };
+        ws.onclose = () => {
+            appendConsole("Console Disconnected. Reconnecting...", "warning");
+            setTimeout(connectWs, 3000);
+        };
+        ws.onerror = (err) => {
+            // appendConsole("Console Error", "error");
+        };
+    }
+    
+    connectWs();
+    // ---------------------
+
+    const btnStart = document.getElementById('btn-start');
+    const btnStop = document.getElementById('btn-stop');
+    const btnReset = document.getElementById('btn-reset');
+    const statusDiv = document.getElementById('status');
+    const bcValueInput = document.getElementById('bc-value');
+    const totalTimeInput = document.getElementById('sim-total-time');
+    const dtSaveInput = document.getElementById('sim-dt-save');
+    const chkShowTerrain = document.getElementById('chk-show-terrain');
+    const chkShowWater = document.getElementById('chk-show-water');
+    const chkPlaybackShowWater = document.getElementById('chk-playback-show-water');
+
+    const inflowSettingsDiv = document.getElementById('inflow-settings');
+    const outflowSettingsDiv = document.getElementById('outflow-settings');
+
+    const defaultBcSettingsDiv = document.getElementById('default-bc-settings');
+    const inflowTypeSel = document.getElementById('inflow-type');
+    const inflowModeSel = document.getElementById('inflow-mode');
+    const inflowValInput = document.getElementById('inflow-value');
+    const inflowSeriesDiv = document.getElementById('inflow-series-input');
+    const inflowConstantDiv = document.getElementById('inflow-constant-input');
+    const inflowSeriesData = document.getElementById('inflow-series-data');
+    
+    // Outflow UI Elements
+    const outflowTypeSel = document.getElementById('outflow-type');
+    const outflowQInput = document.getElementById('outflow-q-input');
+    const outflowConfirmPanel = document.getElementById('outflow-confirm-panel');
+    const btnCreateOutflow = document.getElementById('btn-create-outflow');
+    const btnCancelOutflow = document.getElementById('btn-cancel-outflow');
+
+    // AOI UI Elements
+    const aoiSettingsDiv = document.getElementById('aoi-settings');
+    const aoiConfirmPanel = document.getElementById('aoi-confirm-panel');
+    const aoiStatus = document.getElementById('aoi-status');
+    const btnCreateAoi = document.getElementById('btn-create-aoi');
+    const btnCancelAoi = document.getElementById('btn-cancel-aoi');
+
+    // Handle Inflow UI logic
+    const updateInflowLabels = () => {
+        if (inflowTypeSel.value === 'H') {
+            document.querySelector('#inflow-constant-input label').innerText = "Water Level (m):";
+            document.querySelector('#inflow-series-input label').innerText = "Series (Time(s), Level(m)):";
+        } else {
+            document.querySelector('#inflow-constant-input label').innerText = "Flow Rate (m3/s):";
+            document.querySelector('#inflow-series-input label').innerText = "Series (Time(s), Flow(m3/s)):";
+        }
+    };
+
+    inflowTypeSel.onchange = updateInflowLabels;
+
+    inflowModeSel.onchange = () => {
+        if (inflowModeSel.value === 'series') {
+            inflowSeriesDiv.style.display = 'block';
+            inflowConstantDiv.style.display = 'none';
+        } else {
+            inflowSeriesDiv.style.display = 'none';
+            inflowConstantDiv.style.display = 'block';
+        }
+    };
+
+    // Outflow UI Logic
+    outflowTypeSel.onchange = () => {
+        if (outflowTypeSel.value === 'fixed_q') {
+            outflowQInput.style.display = 'block';
+        } else {
+            outflowQInput.style.display = 'none';
+        }
+    };
+
+    // --- 1D Visualization Logic ---
+    let chart1D = null;
+    let polyline1D = null;
+    const panel1D = document.getElementById('panel-1d');
+    const btnClose1D = document.getElementById('btn-close-1d');
+    const chkShow1D = document.getElementById('chk-show-1d');
+
+    // Toggle Panel
+    const update1DVisibility = () => {
+        if (chkShow1D.checked) {
+            panel1D.style.display = 'flex';
+            if (polyline1D) polyline1D.addTo(map);
+        } else {
+            panel1D.style.display = 'none';
+            if (polyline1D) polyline1D.remove();
+        }
+    };
+    chkShow1D.onchange = update1DVisibility;
+    btnClose1D.onclick = () => { chkShow1D.checked = false; update1DVisibility(); };
+
+    // Setup Chart.js
+    function setup1DChart() {
+        if (typeof Chart === 'undefined') {
+            console.error("Chart.js not loaded!");
+            return;
+        }
+        const ctx = document.getElementById('chart-1d').getContext('2d');
+        chart1D = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: [], // Node Indices
+                datasets: [
+                    {
+                        label: 'Water Level (m)',
+                        borderColor: 'blue',
+                        backgroundColor: 'rgba(0, 0, 255, 0.1)',
+                        data: [],
+                        fill: true,
+                        tension: 0.1
+                    },
+                    {
+                        label: 'Bed Elevation (m)',
+                        borderColor: 'brown',
+                        backgroundColor: 'rgba(139, 69, 19, 0.5)',
+                        data: [],
+                        fill: true,
+                        pointRadius: 0,
+                        borderWidth: 2
+                    }
+                ]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    x: { title: { display: true, text: 'Node Index' } },
+                    y: { title: { display: true, text: 'Elevation (m)' } }
+                },
+                animation: false // Disable animation for performance
+            }
+        });
+    }
+    setup1DChart();
+
+    async function update1DGeometry() {
+        try {
+            const res = await fetch(API_URL + "/view/1d_geometry");
+            const data = await res.json();
+            const coords = data.geometry; // [[lat, lon], ...]
+            
+            if (polyline1D) polyline1D.remove();
+            
+            if (coords && coords.length > 0) {
+                polyline1D = L.polyline(coords, { color: 'red', weight: 3, opacity: 0.8 }).addTo(map);
+                
+                // Add tooltip
+                polyline1D.bindTooltip("1D Channel");
+                
+                // If checkbox is unchecked, hide it immediately
+                if (!chkShow1D.checked) polyline1D.remove();
+            }
+        } catch (e) {
+            console.error("Failed to load 1D geometry", e);
+        }
+    }
+
+    async function update1DResults() {
+        if (!chkShow1D.checked) return; // Skip if hidden
+        
+        try {
+            // 1. Try Network State
+            const resNet = await fetch(API_URL + "/get_network_state");
+            if (resNet.ok) {
+                const netData = await resNet.json();
+                if (netData.edges && netData.edges.length > 0) {
+                    // Update Chart with First Edge (or selected)
+                    // TODO: Add selection logic. For now, Edge 0.
+                    const edge = netData.edges[0];
+                    plot1DChart(edge.h, edge.z, `Edge ${edge.id}`);
+                    return;
+                }
+            }
+
+            // 2. Fallback to Legacy
+            if (!chart1D) return;
+            const res = await fetch(API_URL + "/view/1d_results");
+            if (res.ok) {
+                const data = await res.json();
+                // data format: { h: [...], u: [...], z: [...] }
+                if (data.h && data.h.length > 0) {
+                     plot1DChart(data.h, data.z, "Legacy Channel");
+                }
+            }
+            
+        } catch (e) {
+            console.error("Failed to update 1D results", e);
+        }
+    }
+
+    // Hook refreshNetworkMap into update1DResults
+    const originalUpdate1DResults = update1DResults;
+    update1DResults = async function() {
+        await originalUpdate1DResults();
+        // Also refresh map geometry/status (e.g. colors based on H)
+        if (chkShow1D.checked) {
+             await refreshNetworkMap();
+        }
+    };
+
+    function plot1DChart(h, z, label) {
+        if (!chart1D || !h || h.length === 0) return;
+        
+        const labels = h.map((_, i) => i);
+        const zArr = z || new Array(h.length).fill(0);
+        const wse = h.map((val, i) => val + zArr[i]);
+        
+        chart1D.data.labels = labels;
+        chart1D.data.datasets[0].data = wse;
+        chart1D.data.datasets[0].label = `Water Level (${label})`;
+        chart1D.data.datasets[1].data = zArr;
+        chart1D.update();
+    }
+
+    // Leaflet Map Init
+    // Initialize centered on China with OpenStreetMap
+    const map = L.map('map', {
+        minZoom: 2,
+        maxZoom: 18,
+        center: [35.0, 105.0], // China Center
+        zoom: 4,
+        zoomControl: true
+    });
+
+    // Base Layers
+    const osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    });
+
+    const satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+        attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community'
+    });
+
+    // Add Default Layer
+    osmLayer.addTo(map);
+
+    // Layer Control
+    L.control.layers({
+        "OpenStreetMap": osmLayer,
+        "Satellite Imagery": satelliteLayer
+    }).addTo(map);
+
+    let terrainOverlay = null;
+    let waterOverlay = null;
+    let gridBounds = null; 
+
+    // UI Mode Helper
+    function updateUIMode(mode) {
+        const is2DOnly = (mode === '2d_only');
+        
+        // 1D Visualization Checkbox
+        const chk1D = document.getElementById('chk-show-1d');
+        if (chk1D) {
+            chk1D.parentElement.style.display = is2DOnly ? 'none' : 'block';
+            if (is2DOnly && chk1D.checked) {
+                chk1D.checked = false;
+                chk1D.dispatchEvent(new Event('change')); // Trigger change event
+            }
+        }
+        
+        // 1D Tool Button
+        const btn1D = document.querySelector('button[data-tool="channel_1d"]');
+        if (btn1D) btn1D.style.display = is2DOnly ? 'none' : 'inline-block';
+        
+        // Coupling Settings
+        const couplingIds = ['sim-coupling-cd', 'sim-coupling-method', 'sim-bank-height'];
+        couplingIds.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) {
+                el.disabled = is2DOnly;
+                el.style.opacity = is2DOnly ? '0.5' : '1.0';
+                // Dim the label if it's the previous sibling
+                if (el.previousElementSibling && el.previousElementSibling.tagName === 'LABEL') {
+                    el.previousElementSibling.style.opacity = is2DOnly ? '0.5' : '1.0';
+                }
+            }
+        });
+    }
+
+    // Mode Toggle Logic
+    let is2DOnlyMode = false; // Default State (Button says "Load 2D Only")
+
+    document.getElementById('btn-mode-toggle').onclick = async () => {
+        const btn = document.getElementById('btn-mode-toggle');
+        
+        if (!is2DOnlyMode) {
+            // Action: Switch to 2D Only Mode
+            statusDiv.innerText = "Initializing 2D Only Simulation...";
+            try {
+                const res = await fetch(API_URL + "/init_2d_simulation", { method: "POST" });
+                const data = await res.json();
+                await handleInitResponse(data);
+                
+                // Update State
+                is2DOnlyMode = true;
+                updateUIMode('2d_only');
+                btn.innerText = "Switch to Coupled 1D-2D";
+                btn.style.background = "#6f42c1"; // Purple for Coupled Next
+                document.getElementById('app-title').innerText = "2D Hydro Model (2D Only)";
+            } catch (e) {
+                statusDiv.innerText = "Error initializing: " + e;
+            }
+        } else {
+            // Action: Switch to Coupled Mode
+            statusDiv.innerText = "Initializing Coupled 1D-2D Simulation...";
+            try {
+                const res = await fetch(API_URL + "/init_coupling_test", { method: "POST" });
+                const data = await res.json();
+                await handleInitResponse(data);
+                
+                // Update State
+                is2DOnlyMode = false;
+                updateUIMode('coupled');
+                btn.innerText = "Switch to 2D Only (No 1D)";
+                btn.style.background = "#20c997"; // Teal for 2D Next
+                document.getElementById('app-title').innerText = "Coupled 1D-2D Hydro Model";
+            } catch (e) {
+                statusDiv.innerText = "Error initializing: " + e;
+            }
+        }
+    };
+
+    // Upload DEM
+    document.getElementById('dem-upload').onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        
+        statusDiv.innerText = "Uploading DEM...";
+        const formData = new FormData();
+        formData.append("file", file);
+        
+        const res = await fetch(API_URL + "/upload_dem", {
+            method: "POST",
+            body: formData
+        });
+        const data = await res.json();
+        await handleInitResponse(data);
+    };
+
+    // Upload Boundary
+    document.getElementById('boundary-upload').onchange = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        
+        statusDiv.innerText = "Uploading Boundary...";
+        const formData = new FormData();
+        formData.append("file", file);
+        // Pass the current BC value (e.g. for mask or boundary) - though mask usually has no value, 
+        // passing it makes it flexible if we support other types later.
+        formData.append("value", parseFloat(bcValueInput.value)); 
+        
+        try {
+            const res = await fetch(API_URL + "/upload_boundary_file", {
+                method: "POST",
+                body: formData
+            });
+            const data = await res.json();
+            
+            if (data.status === "ok") {
+                statusDiv.innerText = `Boundary Loaded. Marked ${data.cells_marked} cells.`;
+                refreshOverlay(); // Refresh to see the mask (which affects result visualization)
+            } else {
+                statusDiv.innerText = "Error: " + (data.message || "Unknown error");
+            }
+        } catch (err) {
+            statusDiv.innerText = "Upload failed: " + err;
+        }
+    };
+
+    let useDynamicView = true; // Enable dynamic viewport rendering
+
+    async function updateTerrainLayer() {
+        if (!gridBounds || !chkShowTerrain.checked) return;
+        
+        let url = "";
+        let overlayBounds = gridBounds;
+        
+        if (useDynamicView) {
+            const bounds = map.getBounds();
+            const size = map.getSize();
+            const bbox = `${bounds.getWest()},${bounds.getSouth()},${bounds.getEast()},${bounds.getNorth()}`;
+            url = `${API_URL}/view/water_dynamic?t=${new Date().getTime()}&show_terrain=true&show_water=false&bbox=${bbox}&width=${Math.round(size.x)}&height=${Math.round(size.y)}`;
+            overlayBounds = bounds; // Initial guess
+        } else {
+            url = API_URL + "/view/water?t=" + new Date().getTime() + "&show_terrain=true&show_water=false";
+        }
+        
+        return new Promise((resolve) => {
+            fetch(url).then(res => {
+                const boundsHeader = res.headers.get("X-Image-Bounds");
+                return Promise.all([res.blob(), boundsHeader]);
+            }).then(([blob, boundsHeader]) => {
+                if (useDynamicView && boundsHeader) {
+                    const parts = boundsHeader.split(',').map(parseFloat);
+                    overlayBounds = [[parts[0], parts[1]], [parts[2], parts[3]]];
+                }
+                const objectUrl = URL.createObjectURL(blob);
+                const nextOverlay = L.imageOverlay(objectUrl, overlayBounds, { zIndex: 1, opacity: 1.0 });
+                
+                nextOverlay.on('load', () => {
+                    if (terrainOverlay && map.hasLayer(terrainOverlay)) map.removeLayer(terrainOverlay);
+                    terrainOverlay = nextOverlay;
+                    resolve();
+                });
+                nextOverlay.on('error', () => resolve());
+                nextOverlay.addTo(map);
+            }).catch(e => resolve());
+        });
+    }
+
+    async function onMapMoveEnd() {
+        if (!useDynamicView) return;
+        // Debounce or just update
+        await updateTerrainLayer();
+        // Update Water too
+        if (isRunning) refreshOverlay();
+        else if (slider.disabled === false) showFrame(playbackIndex);
+        else refreshOverlay();
+    }
+
+    async function handleInitResponse(data) {
+        if (data.status === "initialized") {
+            statusDiv.innerText = "Status: Ready";
+            btnStart.disabled = false;
+            btnReset.disabled = false; // Enable reset once initialized
+            
+            // Set bounds from server response
+            // data.bounds should be [[min_lat, min_lon], [max_lat, max_lon]]
+            gridBounds = data.bounds;
+            
+            if (terrainOverlay) map.removeLayer(terrainOverlay);
+            if (waterOverlay) map.removeLayer(waterOverlay);
+            
+            map.fitBounds(gridBounds);
+            
+            // Initial Update
+            await updateTerrainLayer();
+            // refreshOverlay will handle water layer
+            await refreshOverlay(); 
+
+            // Setup Dynamic Listeners
+            map.off('moveend', onMapMoveEnd);
+            if (useDynamicView) {
+                map.on('moveend', onMapMoveEnd);
+            }
+            
+            // Update 1D Geometry
+            await update1DGeometry();
+            
+            // Auto-open 1D chart if 1D geometry exists
+            if (polyline1D) {
+                 chkShow1D.checked = true;
+                 update1DVisibility();
+            }
+        } else if (data.status === "mode_set") {
+            statusDiv.innerText = data.message;
+            // Clear layers
+            if (terrainOverlay) map.removeLayer(terrainOverlay);
+            if (waterOverlay) map.removeLayer(waterOverlay);
+            terrainOverlay = null;
+            waterOverlay = null;
+            gridBounds = null;
+            
+            // Center on China (Default)
+            map.setView([35.0, 105.0], 4);
+            
+            btnStart.disabled = true;
+            btnReset.disabled = true;
+        }
+    }
+
+    // Simulation Loop
+    btnStart.onclick = async () => {
+        if (isRunning) return;
+        
+        const totalTime = parseFloat(totalTimeInput.value);
+        const dtSave = parseFloat(dtSaveInput.value);
+        const couplingCd = parseFloat(document.getElementById('sim-coupling-cd').value);
+        const couplingMethod = document.getElementById('sim-coupling-method').value;
+        const bankHeight = parseFloat(document.getElementById('sim-bank-height').value);
+
+        // Reset Playback UI to ensure Live Mode context
+        slider.disabled = true;
+        btnPlay.disabled = true;
+        btnPause.disabled = true;
+        slider.value = 0;
+        playbackStatus.innerText = "Simulation Running...";
+        removeAllWaterLayers(); // Clear any playback results
+
+        // Start server-side simulation
+        const res = await fetch(API_URL + "/start?dt_save=" + dtSave + "&total_time=" + totalTime + "&coupling_cd=" + couplingCd + "&coupling_method=" + couplingMethod + "&bank_height=" + bankHeight, { method: "POST" });
+        if (res.ok) {
+            isRunning = true;
+            btnStart.disabled = true;
+            btnStop.disabled = false;
+            btnReset.disabled = true; // Disable reset
+            btnRefreshResults.disabled = true; // Disable results loading while running
+            runLoop(); // Start polling for view updates
+        }
+    };
+
+    btnStop.onclick = async () => {
+        // Stop server-side simulation
+        await fetch(API_URL + "/stop", { method: "POST" });
+        
+        isRunning = false;
+        btnStart.disabled = false;
+        btnStop.disabled = true;
+        btnReset.disabled = false; // Enable reset
+        btnRefreshResults.disabled = false; // Enable results loading
+        statusDiv.innerText = "Simulation Stopped.";
+    };
+
+    btnReset.onclick = async () => {
+        if (confirm("Reset simulation state? This will clear all water and reset time to 0.")) {
+            const res = await fetch(API_URL + "/reset", { method: "POST" });
+            if (res.ok) {
+                appendConsole("Simulation reset successfully.", "success");
+                removeAllWaterLayers();
+                // Reset slider
+                slider.value = 0;
+                playbackStatus.innerText = "Frame: 0 / 0";
+                // Clear 1D Chart if open
+                if (chart1D) {
+                     // Clear only water dataset?
+                     // Actually better to just refresh or let next update handle it.
+                }
+            } else {
+                appendConsole("Failed to reset simulation.", "error");
+            }
+        }
+    };
+
+    function removeAllWaterLayers() {
+        const layersToRemove = [];
+        map.eachLayer((layer) => {
+            if (layer.options && layer.options.className === 'water-layer') {
+                layersToRemove.push(layer);
+            }
+        });
+        layersToRemove.forEach(layer => map.removeLayer(layer));
+        waterOverlay = null;
+    }
+
+    async function updateWaterLayer(url) {
+        return new Promise((resolve) => {
+            if (!gridBounds) { resolve(); return; }
+            
+            // Determine visibility
+            let isVisible = true;
+            if (isRunning) isVisible = chkShowWater.checked;
+            else if (slider.disabled === false) isVisible = chkPlaybackShowWater.checked;
+            else isVisible = chkShowWater.checked;
+
+            if (!isVisible) {
+                removeAllWaterLayers();
+                resolve();
+                return;
+            }
+
+            // Append Dynamic Params if needed
+            let finalUrl = url;
+            if (useDynamicView) {
+                const bounds = map.getBounds();
+                const size = map.getSize();
+                const bbox = `${bounds.getWest()},${bounds.getSouth()},${bounds.getEast()},${bounds.getNorth()}`;
+                const sep = url.includes('?') ? '&' : '?';
+                finalUrl = `${url}${sep}bbox=${bbox}&width=${Math.round(size.x)}&height=${Math.round(size.y)}`;
+            }
+
+            // Fetch
+            fetch(finalUrl).then(res => {
+                 const boundsHeader = res.headers.get("X-Image-Bounds");
+                 return Promise.all([res.blob(), boundsHeader]);
+            }).then(([blob, boundsHeader]) => {
+                let overlayBounds = gridBounds; // Default for static
+                if (useDynamicView) {
+                     overlayBounds = map.getBounds(); // Default for dynamic
+                     if (boundsHeader) {
+                         const parts = boundsHeader.split(',').map(parseFloat);
+                         overlayBounds = [[parts[0], parts[1]], [parts[2], parts[3]]];
+                     }
+                }
+                
+                const objectUrl = URL.createObjectURL(blob);
+                const nextOverlay = L.imageOverlay(objectUrl, overlayBounds, { 
+                    zIndex: 10, 
+                    opacity: 1.0,
+                    className: 'water-layer' 
+                });
+                
+                nextOverlay.on('load', () => {
+                     // Visibility check again
+                     let isVisibleNow = true;
+                     if (isRunning) isVisibleNow = chkShowWater.checked;
+                     else if (slider.disabled === false) isVisibleNow = chkPlaybackShowWater.checked;
+                     else isVisibleNow = chkShowWater.checked;
+                     
+                     if (!isVisibleNow) {
+                         map.removeLayer(nextOverlay);
+                         removeAllWaterLayers();
+                         return;
+                     }
+
+                     const oldOverlay = waterOverlay;
+                     waterOverlay = nextOverlay;
+                     if (oldOverlay) map.removeLayer(oldOverlay);
+                     resolve();
+                });
+                
+                nextOverlay.on('error', () => {
+                    console.warn("Error loading overlay: " + finalUrl);
+                    map.removeLayer(nextOverlay);
+                    resolve();
+                });
+                
+                nextOverlay.addTo(map);
+                
+                // Timeout
+                setTimeout(() => { if (!nextOverlay.complete) resolve(); }, 5000);
+            }).catch(e => { resolve(); });
+        });
+    }
+
+    // --- Velocity Visualization Logic ---
+    const chkShowVelocity = document.getElementById('chk-show-velocity');
+    let velocityLayerGroup = L.layerGroup().addTo(map);
+
+    chkShowVelocity.onchange = () => {
+        if (!chkShowVelocity.checked) {
+            velocityLayerGroup.clearLayers();
+        } else {
+            // Trigger update immediately if possible
+            if (isRunning) refreshOverlay();
+            else if (slider.disabled === false) showFrame(playbackIndex);
+        }
+    };
+    
+    // Listen for zoom events to update vectors
+    map.on('zoomend', () => {
+        if (chkShowVelocity.checked) {
+             if (isRunning) refreshOverlay();
+             else if (slider.disabled === false) showFrame(playbackIndex);
+        }
+    });
+
+    async function updateVelocityVectors(url) {
+        if (!chkShowVelocity.checked) return;
+        
+        try {
+            const res = await fetch(url);
+            if (!res.ok) return;
+            const vectors = await res.json(); // Array of {lat, lon, u, v, m, a}
+            
+            velocityLayerGroup.clearLayers();
+            
+            if (!vectors || vectors.length === 0) return;
+            
+            // Dynamic Arrow Size based on Zoom
+            const zoom = map.getZoom();
+            const size = Math.max(12, Math.min(32, zoom * 1.5));
+            const anchor = size / 2;
+            // Scale SVG slightly smaller than container
+            const svgSize = Math.floor(size * 0.8);
+            
+            // Screen Space Culling for Density Control
+            // We use a pixel grid to ensure arrows are evenly spaced on screen
+            // regardless of map zoom or data resolution.
+            const gridCellSize = 60; // Pixels. Increase for sparser, decrease for denser.
+            const occupiedCells = new Set();
+            const bounds = map.getBounds();
+            
+            for (let i = 0; i < vectors.length; i++) {
+                const vec = vectors[i];
+                
+                // Optimization: Skip if outside viewport
+                // Simple bounds check before expensive projection
+                if (vec.lat < bounds.getSouth() || vec.lat > bounds.getNorth() || 
+                    vec.lon < bounds.getWest() || vec.lon > bounds.getEast()) {
+                    continue;
+                }
+                
+                const latlng = L.latLng(vec.lat, vec.lon);
+                const point = map.latLngToContainerPoint(latlng);
+                
+                // Grid Check
+                const gx = Math.floor(point.x / gridCellSize);
+                const gy = Math.floor(point.y / gridCellSize);
+                const key = `${gx},${gy}`;
+                
+                if (occupiedCells.has(key)) continue;
+                occupiedCells.add(key);
+                
+                // Render Arrow
+                // Rotate arrow to match direction
+                // We assume angle 'a' from server is correct Map Angle (East=0, North=90)
+                const rotation = 90 - (vec.a * 180 / Math.PI);
+                
+                // Color Code based on Magnitude (m/s)
+                const m = vec.m;
+                let color = '#00FF00';
+                if (m > 3) color = '#FF0000';
+                else if (m > 1.5) color = '#FFA500';
+                else if (m > 0.5) color = '#FFFF00';
+                
+                // Make arrow colored with drop shadow for visibility
+                const icon = L.divIcon({
+                    className: 'velocity-arrow',
+                    html: `<div style="transform: rotate(${rotation}deg); width: ${size}px; height: ${size}px; display: flex; align-items: center; justify-content: center; filter: drop-shadow(0px 0px 2px rgba(0,0,0,0.8));">
+                             <svg width="${svgSize}" height="${svgSize}" viewBox="0 0 24 24" fill="none" stroke="${color}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                               <line x1="12" y1="19" x2="12" y2="5"></line>
+                               <polyline points="5 12 12 5 19 12"></polyline>
+                             </svg>
+                           </div>`,
+                    iconSize: [size, size],
+                    iconAnchor: [anchor, anchor]
+                });
+                
+                L.marker(latlng, { icon: icon, interactive: false }).addTo(velocityLayerGroup);
+            }
+            
+        } catch (e) {
+            console.error("Failed to load velocity vectors", e);
+        }
+    }
+
+    async function runLoop() {
+        if (!isRunning) return;
+        
+        // Refresh View (Polling)
+        await refreshOverlay();
+        await update1DResults();
+        
+        // Immediate next frame request
+        if (isRunning) {
+            requestAnimationFrame(() => runLoop());
+        }
+    }
+
+    function getStride() {
+        // Dynamic Stride based on Zoom
+        // Base: Zoom 13 -> Stride 10 (approx 500m spacing)
+        // Zoom 15 -> Stride 2
+        // Zoom 10 -> Stride 40
+        const zoom = map.getZoom();
+        let stride = 10;
+        
+        if (zoom >= 15) stride = 2;
+        else if (zoom >= 14) stride = 5;
+        else if (zoom >= 13) stride = 10;
+        else if (zoom >= 12) stride = 20;
+        else if (zoom >= 10) stride = 40;
+        else stride = 80;
+        
+        return stride;
+    }
+
+    async function refreshOverlay() {
+        if (!gridBounds) return;
+        
+        let url = "";
+        if (useDynamicView) {
+            url = API_URL + "/view/water_dynamic?t=" + new Date().getTime() + "&show_terrain=false&show_water=true";
+        } else {
+            url = API_URL + "/view/water?t=" + new Date().getTime() + "&show_terrain=false&show_water=true";
+        }
+        
+        // Parallel fetch for velocity if needed
+        const p1 = updateWaterLayer(url);
+        
+        let p2 = Promise.resolve();
+        if (chkShowVelocity.checked) {
+             const stride = getStride();
+             const velUrl = API_URL + "/view/velocity?stride=" + stride;
+             p2 = updateVelocityVectors(velUrl);
+        }
+        
+        await Promise.all([p1, p2]);
+    }
+    
+    const updateView = () => {
+        // Handle Terrain Visibility
+        if (terrainOverlay) {
+            if (chkShowTerrain.checked) {
+                if (!map.hasLayer(terrainOverlay)) terrainOverlay.addTo(map);
+            } else {
+                if (map.hasLayer(terrainOverlay)) map.removeLayer(terrainOverlay);
+            }
+        }
+
+        if (isRunning) {
+             // Live Mode (Running)
+             // Force refresh to apply visibility changes immediately
+             refreshOverlay();
+        } else {
+             // Not Running
+             if (slider.disabled === false) {
+                 // Playback mode active
+                 showFrame(playbackIndex);
+             } else {
+                 // Idle Live mode
+                 refreshOverlay();
+             }
+        }
+    };
+
+    chkShowTerrain.onchange = updateView;
+    chkShowWater.onchange = updateView;
+    chkPlaybackShowWater.onchange = updateView;
+
+    // --- Playback Logic ---
+    let isPlaying = false;
+    let playbackIndex = 0;
+    let maxPlaybackIndex = 0;
+    let playbackTimer = null;
+    
+    const btnPlay = document.getElementById('btn-play');
+    const btnPause = document.getElementById('btn-pause');
+    const slider = document.getElementById('playback-slider');
+    const playbackStatus = document.getElementById('playback-status');
+    const playbackSpeedInput = document.getElementById('playback-speed');
+    const btnRefreshResults = document.getElementById('btn-refresh-results');
+
+    btnRefreshResults.onclick = async () => {
+        const res = await fetch(API_URL + "/results/count");
+        const data = await res.json();
+        // count is next save index, so max index is count - 1
+        maxPlaybackIndex = data.count > 0 ? data.count - 1 : 0;
+        
+        if (data.count > 0) {
+            btnPlay.disabled = false;
+            slider.disabled = false;
+            slider.max = maxPlaybackIndex;
+            playbackStatus.innerText = `Frame: ${playbackIndex} / ${maxPlaybackIndex}`;
+            
+            // Show first frame immediately
+            showFrame(playbackIndex);
+        } else {
+            playbackStatus.innerText = "No results found";
+            btnPlay.disabled = true;
+            slider.disabled = true;
+        }
+    };
+
+    btnPlay.onclick = () => {
+        if (maxPlaybackIndex < 0) return;
+        isPlaying = true;
+        btnPlay.disabled = true;
+        btnPause.disabled = false;
+        playLoop();
+    };
+
+    btnPause.onclick = () => {
+        isPlaying = false;
+        btnPlay.disabled = false;
+        btnPause.disabled = true;
+        if (playbackTimer) clearTimeout(playbackTimer);
+    };
+
+    slider.oninput = async () => {
+        // Pause if playing
+        if (isPlaying) {
+             isPlaying = false;
+             btnPlay.disabled = false;
+             btnPause.disabled = true;
+             if (playbackTimer) clearTimeout(playbackTimer);
+        }
+        
+        playbackIndex = parseInt(slider.value);
+        playbackStatus.innerText = `Frame: ${playbackIndex} / ${maxPlaybackIndex}`;
+        await showFrame(playbackIndex);
+    };
+
+    async function playLoop() {
+        if (!isPlaying) return;
+        
+        await showFrame(playbackIndex);
+        
+        if (!isPlaying) return; // Check again after await
+        
+        if (playbackIndex < maxPlaybackIndex) {
+            playbackIndex++;
+        } else {
+            playbackIndex = 0; // Loop
+        }
+        
+        slider.value = playbackIndex;
+        playbackStatus.innerText = `Frame: ${playbackIndex} / ${maxPlaybackIndex}`;
+        
+        const speed = parseInt(playbackSpeedInput.value) || 200;
+        playbackTimer = setTimeout(playLoop, speed);
+    }
+
+    async function showFrame(idx) {
+        if (!gridBounds) return;
+        
+        let url = "";
+        if (useDynamicView) {
+            url = API_URL + "/view/result/" + idx + "/dynamic?show_terrain=false&show_water=true";
+        } else {
+            url = API_URL + "/view/result/" + idx + "?show_terrain=false&show_water=true";
+        }
+        
+        const p1 = updateWaterLayer(url);
+        
+        let p2 = Promise.resolve();
+        if (chkShowVelocity.checked) {
+             const stride = getStride();
+             const velUrl = API_URL + "/view/result/" + idx + "/velocity?stride=" + stride;
+             p2 = updateVelocityVectors(velUrl);
+        }
+        
+        await Promise.all([p1, p2]);
+    }
+
+    // Tools
+    document.querySelectorAll('.tool-btn').forEach(btn => {
+        btn.onclick = () => {
+            document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            currentTool = btn.dataset.tool;
+
+            if (currentTool === 'inflow') {
+                inflowSettingsDiv.style.display = 'block';
+                outflowSettingsDiv.style.display = 'none';
+                aoiSettingsDiv.style.display = 'none';
+                channel1DSettings.style.display = 'none';
+                defaultBcSettingsDiv.style.display = 'none';
+            } else if (currentTool === 'outflow') {
+                inflowSettingsDiv.style.display = 'none';
+                outflowSettingsDiv.style.display = 'block';
+                aoiSettingsDiv.style.display = 'none';
+                channel1DSettings.style.display = 'none';
+                defaultBcSettingsDiv.style.display = 'none';
+            } else if (currentTool === 'aoi') {
+                inflowSettingsDiv.style.display = 'none';
+                outflowSettingsDiv.style.display = 'none';
+                aoiSettingsDiv.style.display = 'block';
+                channel1DSettings.style.display = 'none';
+                defaultBcSettingsDiv.style.display = 'none';
+            } else if (currentTool === 'channel_1d') {
+                inflowSettingsDiv.style.display = 'none';
+                outflowSettingsDiv.style.display = 'none';
+                aoiSettingsDiv.style.display = 'none';
+                channel1DSettings.style.display = 'block';
+                defaultBcSettingsDiv.style.display = 'none';
+            } else {
+                inflowSettingsDiv.style.display = 'none';
+                outflowSettingsDiv.style.display = 'none';
+                aoiSettingsDiv.style.display = 'none';
+                channel1DSettings.style.display = 'none';
+                defaultBcSettingsDiv.style.display = 'block';
+            }
+            
+            if (currentTool !== 'view') {
+                document.querySelector('.leaflet-container').classList.add('draw-mode');
+                map.dragging.disable();
+                map.doubleClickZoom.disable();
+            } else {
+                document.querySelector('.leaflet-container').classList.remove('draw-mode');
+                map.dragging.enable();
+                map.doubleClickZoom.enable();
+            }
+        };
+    });
+
+    // Drawing Logic on Leaflet
+    let drawingPoints = [];
+    let tempShape = null;
+
+    map.on('click', (e) => {
+        if (currentTool === 'view') return;
+        
+        const latlng = e.latlng;
+        drawingPoints.push(latlng);
+        
+        updateTempShape();
+    });
+    
+    map.on('dblclick', async (e) => {
+        if (currentTool === 'view') return;
+        
+        if (drawingPoints.length < 2) {
+             drawingPoints = [];
+             if (tempShape) map.removeLayer(tempShape);
+             tempShape = null;
+             return;
+        }
+        
+        // Finish drawing
+        // Handle 1D Channel Logic First
+        if (currentTool === 'channel_1d') {
+            const latlngs = drawingPoints; 
+            
+            // 1. Identify Start/End
+            const pStart = latlngs[0];
+            const pEnd = latlngs[latlngs.length - 1];
+            
+            let nodeStart = findNodeNear(pStart);
+            if (nodeStart) {
+                // Visual Snap: Update geometry to match node exactly
+                latlngs[0].lat = nodeStart.lat;
+                latlngs[0].lng = nodeStart.lon;
+            } else {
+                nodeStart = { id: nextNodeId++, lat: pStart.lat, lon: pStart.lng, z: 0.0 };
+                networkNodes.push(nodeStart);
+            }
+            
+            let nodeEnd = findNodeNear(pEnd);
+            if (nodeEnd) {
+                // Visual Snap
+                latlngs[latlngs.length - 1].lat = nodeEnd.lat;
+                latlngs[latlngs.length - 1].lng = nodeEnd.lon;
+            } else {
+                nodeEnd = { id: nextNodeId++, lat: pEnd.lat, lon: pEnd.lng, z: 0.0 };
+                networkNodes.push(nodeEnd);
+            }
+            
+            if (nodeStart.id === nodeEnd.id) {
+                alert("Start and End nodes are the same (too short).");
+                drawingPoints = [];
+                if (tempShape) map.removeLayer(tempShape);
+                tempShape = null;
+                return;
+            }
+            
+            // 2. Get Settings
+            const wStart = parseFloat(document.getElementById('net-width-start').value);
+            // Default Width End to Width Start if not explicitly set (logic handled by user input, but we assume if they are equal it's constant)
+            let wEnd = parseFloat(document.getElementById('net-width-end').value);
+            if (isNaN(wEnd)) wEnd = wStart;
+
+            const nVal = parseFloat(document.getElementById('net-n').value);
+            let zStart = parseFloat(document.getElementById('net-z-start').value);
+            let zEnd = parseFloat(document.getElementById('net-z-end').value);
+            const dx = parseFloat(document.getElementById('net-dx').value);
+            
+            // 3. Create Edge
+            const edge = {
+                id: nextEdgeId++,
+                start_id: nodeStart.id,
+                end_id: nodeEnd.id,
+                geometry: latlngs.map(p => [p.lat, p.lng]),
+                width: wStart,
+                width_end: wEnd,
+                n: nVal,
+                z_start: zStart,
+                z_end: zEnd,
+                dx: dx
+            };
+            networkEdges.push(edge);
+            
+            // 4. Render
+            renderNetwork();
+            
+            // 5. Cleanup drawing
+            if (tempShape) map.removeLayer(tempShape);
+            tempShape = null;
+            drawingPoints = [];
+            
+            // 6. Async Elevation Fetch
+            (async () => {
+                try {
+                    const res = await fetch(API_URL + "/query_path_elevation", {
+                        method: "POST",
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ geometry: edge.geometry })
+                    });
+                    if (res.ok) {
+                        const data = await res.json();
+                        edge.z_start = data.start_z;
+                        edge.z_end = data.end_z;
+                        
+                        if (nodeStart.z === 0) nodeStart.z = data.start_z;
+                        if (nodeEnd.z === 0) nodeEnd.z = data.end_z;
+                        
+                        document.getElementById('net-z-start').value = data.start_z.toFixed(2);
+                        document.getElementById('net-z-end').value = data.end_z.toFixed(2);
+                    }
+                } catch (e) { console.error(e); }
+            })();
+            
+            return;
+        }
+
+        // Convert to grid coords (x,y) = (lng, lat)
+        const coords = drawingPoints.map(p => [p.lng, p.lat]);
+        
+        let geoType = "polyline";
+        if (currentTool === 'mask' || currentTool === 'aoi') geoType = "polygon";
+        
+        const payload = {
+            type: currentTool,
+            geometry_type: geoType,
+            points: coords,
+            value: parseFloat(bcValueInput.value)
+        };
+
+        // If Inflow, query DEM stats first and confirm
+        if (currentTool === 'inflow') {
+            statusDiv.innerText = "Querying DEM Stats...";
+            
+            // Prepare geometry for query (Lat/Lon)
+            const queryPoints = drawingPoints.map(p => [p.lat, p.lng]);
+            tempInflowPoints = queryPoints; // Store for later creation
+
+            // Freeze drawing state
+            const frozenShape = L.polyline(drawingPoints, { color: getToolColor(currentTool), weight: 3 }).addTo(map);
+            if (window.lastInflowShape) map.removeLayer(window.lastInflowShape);
+            window.lastInflowShape = frozenShape;
+
+            // Clear interactive drawing
+            drawingPoints = [];
+            if (tempShape) map.removeLayer(tempShape);
+            tempShape = null;
+
+            // Show Confirmation Panel
+            const confirmPanel = document.getElementById('inflow-confirm-panel');
+            const statsDisplay = document.getElementById('inflow-stats-display');
+            confirmPanel.style.display = 'block';
+            statsDisplay.innerHTML = "Loading Elevation Stats...";
+
+            try {
+                const resStats = await fetch(API_URL + "/query_path_elevation", {
+                    method: "POST",
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ geometry: queryPoints })
+                });
+                
+                if (resStats.ok) {
+                    const stats = await resStats.json();
+                    const minZ = stats.min_z.toFixed(2);
+                    const maxZ = stats.max_z.toFixed(2);
+                    statsDisplay.innerHTML = `<strong>Elevation along path:</strong><br>Min: ${minZ} m, Max: ${maxZ} m`;
+                } else {
+                    statsDisplay.innerHTML = "Failed to load stats.";
+                }
+            } catch (e) {
+                console.error("Failed to query path stats", e);
+                statsDisplay.innerHTML = "Error loading stats.";
+            }
+
+            statusDiv.innerText = "Inflow Path Drawn. Please configure and create.";
+            return; // Stop here, wait for user to click Create
+        }
+        
+        // Outflow Confirmation Logic
+        if (currentTool === 'outflow') {
+            // Prepare geometry for query (Lat/Lon)
+            const queryPoints = drawingPoints.map(p => [p.lat, p.lng]);
+            tempInflowPoints = queryPoints; // Reuse tempInflowPoints
+
+            // Freeze drawing state
+            const frozenShape = L.polyline(drawingPoints, { color: getToolColor(currentTool), weight: 3 }).addTo(map);
+            if (window.lastInflowShape) map.removeLayer(window.lastInflowShape);
+            window.lastInflowShape = frozenShape;
+
+            // Clear interactive drawing
+            drawingPoints = [];
+            if (tempShape) map.removeLayer(tempShape);
+            tempShape = null;
+
+            // Show Confirmation Panel
+            outflowConfirmPanel.style.display = 'block';
+            statusDiv.innerText = "Outflow Path Drawn. Please configure and create.";
+            return;
+        }
+
+        // AOI Confirmation Logic
+        if (currentTool === 'aoi') {
+            // Create Polygon and Enable Editing
+            const frozenShape = L.polygon(drawingPoints, { color: getToolColor(currentTool), fillOpacity: 0.2, weight: 2 }).addTo(map);
+            
+            // Enable editing if available
+            if (frozenShape.editing) {
+                frozenShape.editing.enable();
+            } else {
+                // Fallback attempt
+                try {
+                    new L.Edit.Poly(frozenShape).enable();
+                } catch(e) {
+                    console.warn("Leaflet.Draw editing not available:", e);
+                }
+            }
+
+            if (window.lastAoiShape) map.removeLayer(window.lastAoiShape);
+            window.lastAoiShape = frozenShape;
+            
+            // Show Confirm UI
+            aoiConfirmPanel.style.display = 'block';
+            aoiStatus.innerText = "Adjust polygon vertices if needed.";
+            
+            // Clear interactive drawing
+            drawingPoints = [];
+            if (tempShape) map.removeLayer(tempShape);
+            tempShape = null;
+            
+            statusDiv.innerText = "AOI Drawn. Please confirm.";
+            return;
+        }
+
+        console.log("Setting boundary:", payload);
+        
+        try {
+            const res = await fetch(API_URL + "/set_boundary", {
+                method: "POST",
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            
+            if (res.ok) {
+                const json = await res.json();
+                console.log("Boundary Set Success:", json);
+                if (payload.type === 'inflow') {
+                    alert(`Inflow Boundary Set!\nCells: ${json.cells_marked}\nType: ${payload.boundary_type}\nMode: ${payload.mode}`);
+                }
+            } else {
+                console.error("Boundary Set Failed:", res.statusText);
+                alert("Failed to set boundary: " + res.statusText);
+            }
+        } catch (err) {
+            console.error("Boundary Set Error:", err);
+            alert("Error setting boundary: " + err.message);
+        }
+        
+        // Finalize visual
+        if (tempShape) map.removeLayer(tempShape);
+        
+        if (currentTool === 'mask' || currentTool === 'aoi') {
+            L.polygon(drawingPoints, { color: getToolColor(currentTool), fillOpacity: 0.2, weight: 2 }).addTo(map);
+        } else {
+            L.polyline(drawingPoints, { color: getToolColor(currentTool), weight: 3 }).addTo(map);
+        }
+        
+        drawingPoints = [];
+        tempShape = null;
+        
+        setTimeout(() => map.doubleClickZoom.enable(), 100);
+        refreshOverlay();
+    });
+
+    // --- 1D Network Creation Logic ---
+    const btnCreate1D = document.getElementById('btn-create-1d');
+    const btnCancel1D = document.getElementById('btn-cancel-1d');
+    const btnClearNetwork = document.getElementById('btn-clear-network');
+    const channel1DSettings = document.getElementById('channel-1d-settings');
+    
+    // Network State
+    let networkNodes = [];
+    let networkEdges = [];
+    let nextNodeId = 1;
+    let nextEdgeId = 1;
+    let networkLayerGroup = L.layerGroup().addTo(map);
+    let selectedNode = null; // Track selected node for BC
+    
+    // UI Elements for Node Selection
+    const nodeSelectInfo = document.getElementById('node-select-info');
+    // Removed BC UI elements references
+    
+    const SNAP_DISTANCE_PX = 50;
+    
+    // Helper: Find Node near latlng
+    function findNodeNear(latlng) {
+        const p1 = map.latLngToLayerPoint(latlng);
+        for (let n of networkNodes) {
+            const p2 = map.latLngToLayerPoint([n.lat, n.lon]);
+            if (p1.distanceTo(p2) < SNAP_DISTANCE_PX) return n;
+        }
+        return null;
+    }
+    
+    // Helper: Render Network
+    function renderNetwork() {
+        networkLayerGroup.clearLayers();
+        
+        // Render Nodes
+        for (let n of networkNodes) {
+            let color = '#333';
+            let fillColor = '#fff';
+            let radius = 6;
+            
+            // Highlight Inflow
+            if (n.is_inflow) {
+                color = '#dc3545'; // Red for inflow
+                fillColor = '#ffc107';
+                radius = 8;
+            }
+            
+            // Highlight Selected
+            if (selectedNode === n) {
+                color = '#007bff';
+                fillColor = '#b8daff';
+                radius = 8;
+            }
+
+            const marker = L.circleMarker([n.lat, n.lon], {
+                radius: radius,
+                color: color,
+                fillColor: fillColor,
+                fillOpacity: 1
+            }).bindTooltip(`Node ${n.id} ${n.is_inflow ? `(Inflow ${n.inflow_q})` : ''}`).addTo(networkLayerGroup);
+            
+            // Add Click Handler for Selection
+            marker.on('click', (e) => {
+                L.DomEvent.stopPropagation(e);
+                selectedNode = n;
+                
+                // Update UI
+                if (nodeSelectInfo) {
+                    nodeSelectInfo.innerText = `Selected Node: ${n.id} (z=${n.z})`;
+                }
+                
+                renderNetwork(); // Re-render to show selection highlight
+            });
+        }
+        
+        // Render Edges
+        for (let e of networkEdges) {
+            const latlngs = e.geometry;
+            
+            // Dynamic Color based on Depth (if available)
+            let color = 'blue';
+            let weight = 4;
+            
+            if (e.h_avg !== undefined) {
+                // Color Scale: Light Blue -> Dark Blue
+                const h = e.h_avg;
+                if (h < 0.1) color = '#add8e6'; // Light Blue
+                else if (h < 1.0) color = '#00bfff'; // Deep Sky Blue
+                else if (h < 3.0) color = '#0000ff'; // Blue
+                else color = '#00008b'; // Dark Blue
+                
+                // Increase weight if wet
+                if (h > 0.05) weight = 6;
+            }
+            
+            L.polyline(latlngs, {
+                color: color,
+                weight: weight,
+                opacity: 0.7
+            }).bindTooltip(`Edge ${e.id} (w=${e.width}-${e.width_end})`).addTo(networkLayerGroup);
+        }
+        
+        document.getElementById('net-stats-nodes').innerText = networkNodes.length;
+        document.getElementById('net-stats-edges').innerText = networkEdges.length;
+    }
+
+    // Cancel / Close
+    btnCancel1D.onclick = () => {
+        channel1DSettings.style.display = 'none';
+        document.querySelector('[data-tool="view"]').click();
+        
+        // Don't clear network state, just hide layer? Or clear everything?
+        // Let's clear layer but keep state in memory? 
+        // Better to clear everything to avoid confusion.
+        if (networkEdges.length > 0) {
+             if(confirm("Discard current network draft?")) {
+                 networkNodes = [];
+                 networkEdges = [];
+                 nextNodeId = 1;
+                 nextEdgeId = 1;
+                 networkLayerGroup.clearLayers();
+             } else {
+                 channel1DSettings.style.display = 'block'; // Re-show
+                 return;
+             }
+        }
+        networkLayerGroup.clearLayers();
+    };
+    
+    // Clear Network
+    btnClearNetwork.onclick = () => {
+        if(confirm("Clear current network draft?")) {
+            networkNodes = [];
+            networkEdges = [];
+            nextNodeId = 1;
+            nextEdgeId = 1;
+            renderNetwork();
+        }
+    };
+
+    // Confirm Create Network
+    btnCreate1D.onclick = async () => {
+        if (networkEdges.length === 0) {
+            alert("Network is empty!");
+            return;
+        }
+        
+        const payload = {
+            nodes: networkNodes.map(n => ({ 
+                id: n.id, 
+                lat: n.lat, 
+                lon: n.lon, 
+                z: n.z,
+                is_inflow: n.is_inflow || false,
+                inflow_q: n.inflow_q || 0.0
+            })),
+            edges: networkEdges.map(e => ({
+                id: e.id,
+                start_id: e.start_id,
+                end_id: e.end_id,
+                width: e.width,
+                width_end: e.width_end,
+                n: e.n,
+                z_start: e.z_start,
+                z_end: e.z_end,
+                dx: e.dx,
+                geometry: e.geometry // Pass geometry to backend
+            })),
+            initial_h: parseFloat(document.getElementById('net-init-h').value) || 0.0,
+            use_cpp: (document.getElementById('net-engine-type').value === 'cpp')
+        };
+
+        statusDiv.innerText = "Building 1D Network...";
+        try {
+            const res = await fetch(API_URL + "/create_1d_network", {
+                method: "POST",
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+
+            if (res.ok) {
+                const data = await res.json();
+                alert(`Network Built!\nNodes: ${data.nodes}\nEdges: ${data.edges}`);
+                channel1DSettings.style.display = 'none';
+                
+                // Switch back to view
+                document.querySelector('[data-tool="view"]').click();
+                
+                // Clear draft visual but assume server has it now
+                networkNodes = [];
+                networkEdges = [];
+                networkLayerGroup.clearLayers();
+                
+                // Update Visualization (maybe need new endpoint for network viz)
+                chkShow1D.checked = true;
+                update1DVisibility();
+                
+                // Immediately refresh network from backend to show it
+                await refreshNetworkMap();
+                
+            } else {
+                alert("Failed to create network: " + res.statusText);
+            }
+        } catch (err) {
+            alert("Error: " + err.message);
+        }
+    };
+
+    // Helper: Load and Render Network from Backend
+    async function refreshNetworkMap() {
+        try {
+            const res = await fetch(API_URL + "/get_network_state");
+            if (!res.ok) return;
+            const netData = await res.json();
+            
+            networkLayerGroup.clearLayers();
+            
+            // Update Global State for Tools (Snapping)
+            networkNodes = []; // Clear and repopulate
+            
+            // Render Backend Nodes
+            for (let n of netData.nodes) {
+                // Store in global state for snapping
+                networkNodes.push({
+                    id: n.id,
+                    lat: n.lat,
+                    lon: n.lon,
+                    z: n.z || 0, // Backend might not send z if not requested, but usually does
+                    h: n.h,
+                    is_inflow: false, // State lost on refresh unless backend sends it. 
+                    // Backend doesn't send bc_type in get_network_state yet, but that's ok for snapping.
+                    // If we want to visualize existing inflows, we need backend to send that info.
+                });
+
+                if (n.lat && n.lon) {
+                    L.circleMarker([n.lat, n.lon], {
+                        radius: 6,
+                        color: '#0056b3', // Darker blue for committed nodes
+                        fillColor: '#80bdff',
+                        fillOpacity: 1
+                    }).bindTooltip(`Node ${n.id} (H=${n.h.toFixed(2)}m)`).addTo(networkLayerGroup);
+                }
+            }
+            
+            // Render Backend Edges
+            for (let e of netData.edges) {
+                if (e.geometry) {
+                    L.polyline(e.geometry, {
+                        color: '#007bff', // Committed blue
+                        weight: 4,
+                        opacity: 0.8
+                    }).bindTooltip(`Edge ${e.id}`).addTo(networkLayerGroup);
+                } else {
+                     // Fallback if no geometry: connect nodes?
+                     // We need to find nodes by ID from netData.nodes
+                     // This is slow O(N^2), but N is small.
+                     const n1 = netData.nodes.find(n => n.id == e.start_id); // Backend doesn't send start_id in edges list yet?
+                     // get_network_state returns edge results: h, u, z, geometry.
+                     // It does NOT return start_id/end_id in current implementation of get_network_state
+                     // So we MUST rely on geometry field being present.
+                }
+            }
+            
+        } catch (e) {
+            console.error("Failed to refresh network map", e);
+        }
+    }
+
+    // --- AOI Creation Logic ---
+    btnCancelAoi.onclick = () => {
+        aoiConfirmPanel.style.display = 'none';
+        aoiStatus.innerText = "Draw polygon on map...";
+        if (window.lastAoiShape) {
+            map.removeLayer(window.lastAoiShape);
+            window.lastAoiShape = null;
+        }
+        statusDiv.innerText = "AOI drawing cancelled.";
+    };
+
+    btnCreateAoi.onclick = async () => {
+        if (!window.lastAoiShape) return;
+        
+        // Disable editing first
+        if (window.lastAoiShape.editing) window.lastAoiShape.editing.disable();
+
+        // Get Coordinates (Leaflet returns objects {lat, lng})
+        // For Polygon, getLatLngs() returns an array of rings: [ [p1, p2, ...] ]
+        // We only support simple polygon (first ring)
+        const latlngs = window.lastAoiShape.getLatLngs()[0];
+        
+        // Map to [lng, lat] for server
+        const coords = latlngs.map(p => [p.lng, p.lat]);
+
+        const payload = {
+            type: 'aoi',
+            geometry_type: 'polygon',
+            points: coords,
+            value: 0 // AOI doesn't strictly need value, server handles it
+        };
+
+        statusDiv.innerText = "Setting AOI...";
+        
+        try {
+             const res = await fetch(API_URL + "/set_boundary", {
+                 method: "POST",
+                 headers: { 'Content-Type': 'application/json' },
+                 body: JSON.stringify(payload)
+             });
+             
+             if (res.ok) {
+                 const json = await res.json();
+                 alert(`AOI Set Successfully!\nActive Cells: ${json.cells_marked}`);
+                 
+                 // Cleanup
+                 aoiConfirmPanel.style.display = 'none';
+                 aoiStatus.innerText = "Draw polygon on map...";
+                 
+                 // Replace editable shape with static visual
+                 // Actually, we can just keep the current shape but ensure it's not editable (already disabled)
+                 // But better to re-add clean one or just keep it.
+                 // Let's keep it.
+                 // window.lastAoiShape remains on map as visual confirmation.
+                 // Maybe change color to solid?
+                 window.lastAoiShape.setStyle({ dashArray: null, fillOpacity: 0.2 });
+                 
+                 // We keep window.lastAoiShape so the next draw will remove this one (Single AOI)
+
+                 refreshOverlay();
+                 statusDiv.innerText = "Ready.";
+             } else {
+                 alert("Failed to set AOI: " + res.statusText);
+             }
+        } catch (err) {
+             console.error(err);
+             alert("Error setting AOI: " + err.message);
+        }
+    };
+
+    // --- Inflow Creation Logic (New) ---
+    const btnCreateInflow = document.getElementById('btn-create-inflow');
+    const btnCancelInflow = document.getElementById('btn-cancel-inflow');
+    const inflowConfirmPanel = document.getElementById('inflow-confirm-panel');
+    
+    btnCancelInflow.onclick = () => {
+        inflowConfirmPanel.style.display = 'none';
+        tempInflowPoints = [];
+        if (window.lastInflowShape) {
+            map.removeLayer(window.lastInflowShape);
+            window.lastInflowShape = null;
+        }
+        statusDiv.innerText = "Inflow drawing cancelled.";
+    };
+
+    btnCreateInflow.onclick = async () => {
+        if (!tempInflowPoints || tempInflowPoints.length < 2) {
+            alert("No inflow geometry found.");
+            return;
+        }
+
+        const infType = document.getElementById('inflow-type').value;
+        const infMode = document.getElementById('inflow-mode').value;
+        
+        // Use coordinates as [lng, lat] for GeoJSON/Backend if needed, 
+        // but set_boundary expects "points": [[lng, lat], ...] based on line 990 of original code?
+        // Original line 990: const coords = drawingPoints.map(p => [p.lng, p.lat]);
+        // My tempInflowPoints = [[lat, lng], ...];
+        // So I need to swap them for payload.
+        const coords = tempInflowPoints.map(p => [p[1], p[0]]); 
+
+        const payload = {
+            type: 'inflow',
+            geometry_type: 'polyline',
+            points: coords,
+            boundary_type: infType,
+            mode: infMode,
+            value: 0
+        };
+
+        if (infMode === 'constant') {
+            payload.value = parseFloat(document.getElementById('inflow-value').value);
+        } else {
+            // Parse CSV or Space-Separated (Robust)
+            const raw = document.getElementById('inflow-series-data').value;
+            const series = [];
+            
+            // Normalize separators: replace commas and newlines with spaces, then split by whitespace
+            const tokens = raw.replace(/[,\n\r]+/g, ' ').trim().split(/\s+/);
+            
+            for (let i = 0; i < tokens.length; i += 2) {
+                if (i + 1 < tokens.length) {
+                    const t = parseFloat(tokens[i]);
+                    const v = parseFloat(tokens[i+1]);
+                    if (!isNaN(t) && !isNaN(v)) {
+                        series.push([t, v]);
+                    }
+                }
+            }
+            
+            // Sort by time just in case
+            series.sort((a, b) => a[0] - b[0]);
+
+            payload.series_data = series;
+            payload.value = (series.length > 0) ? series[0][1] : 0;
+        }
+
+        // Check for 1D Node Snap
+        // tempInflowPoints = [[lat, lng], ...]
+        if (typeof networkNodes !== 'undefined' && networkNodes.length > 0) {
+            let snappedNode = null;
+            
+            // Check distance from all nodes to the drawn polyline (any segment)
+            // Use pixel distance for consistency with SNAP_DISTANCE_PX
+            for (let node of networkNodes) {
+                const nodePt = map.latLngToLayerPoint([node.lat, node.lon]);
+                
+                let minDst = Infinity;
+                
+                // tempInflowPoints are [lat, lng]
+                for (let i = 0; i < tempInflowPoints.length - 1; i++) {
+                    const p1 = map.latLngToLayerPoint(tempInflowPoints[i]);
+                    const p2 = map.latLngToLayerPoint(tempInflowPoints[i+1]);
+                    
+                    const dst = L.LineUtil.pointToSegmentDistance(nodePt, p1, p2);
+                    if (dst < minDst) minDst = dst;
+                }
+                
+                if (minDst < SNAP_DISTANCE_PX) {
+                    snappedNode = node;
+                    break;
+                }
+            }
+            
+            if (snappedNode) {
+                // Send to server
+                try {
+                    const res = await fetch(API_URL + "/set_1d_node_bc", {
+                        method: "POST",
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            node_id: snappedNode.id,
+                            type: 'inflow',
+                            value: payload.value
+                        })
+                    });
+                    if (res.ok) {
+                        snappedNode.is_inflow = true;
+                        snappedNode.inflow_q = payload.value;
+                        alert(`Attached Inflow (Q=${payload.value}) to 1D Node ${snappedNode.id}`);
+                        
+                        // Cleanup UI
+                        inflowConfirmPanel.style.display = 'none';
+                        if (window.lastInflowShape) {
+                            map.removeLayer(window.lastInflowShape);
+                            window.lastInflowShape = null;
+                        }
+                        tempInflowPoints = [];
+                        statusDiv.innerText = "Inflow attached to 1D Node.";
+                        
+                        renderNetwork(); // Update visualization (Red Node)
+                        
+                        // Force a full refresh of the network map to ensure 1D channels are redrawn
+                        await refreshNetworkMap();
+                    } else {
+                        const errData = await res.json();
+                        alert(`Failed to attach inflow: ${errData.message || errData.detail || "Unknown error"}`);
+                    }
+                } catch(e) {
+                    alert(`Error contacting server: ${e.message}`);
+                }
+                return; // Stop here, do not send to server as 2D BC
+            }
+        }
+
+        console.log("Creating Inflow:", payload);
+        statusDiv.innerText = "Creating Inflow Boundary...";
+
+        try {
+            const res = await fetch(API_URL + "/set_boundary", {
+                method: "POST",
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            
+            if (res.ok) {
+                const json = await res.json();
+                alert(`Inflow Boundary Set!\nCells: ${json.cells_marked}\nType: ${infType}\nMode: ${infMode}`);
+                
+                // Cleanup UI
+                inflowConfirmPanel.style.display = 'none';
+                if (window.lastInflowShape) {
+                    map.removeLayer(window.lastInflowShape);
+                    window.lastInflowShape = null;
+                }
+                
+                // Add permanent visual
+                L.polyline(tempInflowPoints, { color: getToolColor('inflow'), weight: 3 }).addTo(map);
+                
+                tempInflowPoints = [];
+                statusDiv.innerText = "Ready.";
+                refreshOverlay();
+            } else {
+                alert("Failed to set boundary: " + res.statusText);
+            }
+        } catch (err) {
+            console.error("Boundary Set Error:", err);
+            alert("Error setting boundary: " + err.message);
+        }
+    };
+
+    // --- Outflow Creation Logic (New) ---
+    btnCancelOutflow.onclick = () => {
+        outflowConfirmPanel.style.display = 'none';
+        tempInflowPoints = [];
+        if (window.lastInflowShape) {
+            map.removeLayer(window.lastInflowShape);
+            window.lastInflowShape = null;
+        }
+        statusDiv.innerText = "Outflow drawing cancelled.";
+    };
+
+    btnCreateOutflow.onclick = async () => {
+        if (!tempInflowPoints || tempInflowPoints.length < 2) {
+            alert("No outflow geometry found.");
+            return;
+        }
+
+        const outType = outflowTypeSel.value;
+        // reuse tempInflowPoints (lat, lng) -> swap to (lng, lat)
+        const coords = tempInflowPoints.map(p => [p[1], p[0]]); 
+
+        const payload = {
+            type: 'outflow',
+            geometry_type: 'polyline',
+            points: coords,
+            boundary_type: (outType === 'fixed_q') ? 'Q' : 'H',
+            value: 0
+        };
+
+        if (outType === 'fixed_q') {
+            payload.value = parseFloat(document.getElementById('outflow-value').value);
+        }
+
+        console.log("Creating Outflow:", payload);
+        statusDiv.innerText = "Creating Outflow Boundary...";
+
+        try {
+            const res = await fetch(API_URL + "/set_boundary", {
+                method: "POST",
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            
+            if (res.ok) {
+                const json = await res.json();
+                alert(`Outflow Boundary Set!\nCells: ${json.cells_marked}\nType: ${outType}`);
+                
+                // Cleanup UI
+                outflowConfirmPanel.style.display = 'none';
+                if (window.lastInflowShape) {
+                    map.removeLayer(window.lastInflowShape);
+                    window.lastInflowShape = null;
+                }
+                
+                // Add permanent visual
+                L.polyline(tempInflowPoints, { color: getToolColor('outflow'), weight: 3 }).addTo(map);
+                
+                tempInflowPoints = [];
+                statusDiv.innerText = "Ready.";
+                refreshOverlay();
+            } else {
+                alert("Failed to set boundary: " + res.statusText);
+            }
+        } catch (err) {
+            console.error("Boundary Set Error:", err);
+            alert("Error setting boundary: " + err.message);
+        }
+    };
+    
+    map.on('mousemove', (e) => {
+        if (currentTool === 'view' || drawingPoints.length === 0) return;
+        
+        // Rubberbanding
+        const points = [...drawingPoints, e.latlng];
+        
+        if (tempShape) map.removeLayer(tempShape);
+        
+        if (currentTool === 'mask' || currentTool === 'aoi') {
+             // Show polygon preview (closed)
+             tempShape = L.polygon(points, { color: getToolColor(currentTool), dashArray: '5, 5', weight: 1, interactive: false }).addTo(map);
+        } else {
+             // Show polyline preview
+             tempShape = L.polyline(points, { color: getToolColor(currentTool), dashArray: '5, 5', weight: 1, interactive: false }).addTo(map);
+        }
+    });
+    
+    function updateTempShape() {
+        if (tempShape) map.removeLayer(tempShape);
+        
+        if (currentTool === 'mask' || currentTool === 'aoi') {
+            tempShape = L.polygon(drawingPoints, { color: getToolColor(currentTool), weight: 2, interactive: false }).addTo(map);
+        } else {
+            tempShape = L.polyline(drawingPoints, { color: getToolColor(currentTool), weight: 2, interactive: false }).addTo(map);
+        }
+    }
+
+    function getToolColor(tool) {
+        if (tool === 'inflow') return 'red';
+        if (tool === 'outflow') return 'green';
+        if (tool === 'mask') return 'gray';
+        if (tool === 'aoi') return 'teal';
+        if (tool === 'channel_1d') return 'purple';
+        return 'blue';
+    }
+
+</script>
+<script>
+    // Global Tooltip Logic
+    document.addEventListener('DOMContentLoaded', () => {
+        const tooltip = document.createElement('div');
+        tooltip.className = 'custom-tooltip';
+        document.body.appendChild(tooltip);
+
+        const showTooltip = (e) => {
+            const text = e.target.getAttribute('data-tooltip');
+            if (!text) return;
+            
+            tooltip.textContent = text;
+            tooltip.style.display = 'block';
+            
+            const rect = e.target.getBoundingClientRect();
+            // Default: Right side
+            let left = rect.right + 10;
+            let top = rect.top + (rect.height / 2) - (tooltip.offsetHeight / 2);
+            
+            // Check right boundary
+            if (left + tooltip.offsetWidth > window.innerWidth) {
+                // Flip to left
+                left = rect.left - tooltip.offsetWidth - 10;
+            }
+
+            // Check bottom boundary
+            if (top + tooltip.offsetHeight > window.innerHeight) {
+                 top = window.innerHeight - tooltip.offsetHeight - 5;
+            }
+            // Check top boundary
+            if (top < 0) {
+                top = 5;
+            }
+            
+            tooltip.style.left = left + 'px';
+            tooltip.style.top = top + 'px';
+        };
+
+        const hideTooltip = () => {
+            tooltip.style.display = 'none';
+        };
+
+        // Use event delegation for better performance and dynamic elements
+        document.body.addEventListener('mouseover', (e) => {
+            if (e.target.classList.contains('help-icon')) {
+                showTooltip(e);
+            }
+        });
+        
+        document.body.addEventListener('mouseout', (e) => {
+             if (e.target.classList.contains('help-icon')) {
+                hideTooltip();
+            }
+        });
+    });
+</script>
+</body>
+</html>
