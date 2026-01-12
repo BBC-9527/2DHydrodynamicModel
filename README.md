@@ -1,6 +1,7 @@
 # 2D Hydrodynamic Model (Web-Based High Performance)
 
 This project implements a high-performance **Coupled 1D-2D Hydrodynamic Model** using a **Hybrid C++/Python/Web Architecture**.
+The 1D-2D coupled model still has certain shortcomings: it only supports single-reach calculation and does not yet support multi-reach calculation.
 
 ## Architecture
 - **Core Engine (C++)**: Solves the physics using Finite Volume Method (FVM) and HLL Flux scheme. High performance.
