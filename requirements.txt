@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+numpy
+rasterio
+pillow
+matplotlib
+taichi>=1.6.0
+python-multipart
+pyproj
